@@ -125,24 +125,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     transition: all 0.2s ease;
     background: rgba(255, 255, 255, 0.06);
     border: 0.5px solid rgba(255, 255, 255, 0.1);
-    -webkit-app-region: no-drag;
-  }
-
-  .channel-icon:hover {
-    background: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-
-  .channel-icon:hover svg {
-    stroke: rgba(255, 255, 255, 0.85);
-  }
-
-  .channel-icon:active {
-    transform: scale(0.88);
+    pointer-events: none;
   }
 
   .channel-icon svg {
@@ -236,13 +222,8 @@
     transform: translateY(-60%);
   }
 
-  /* Override transform for active states on positioned icons */
-  .channel-screen:active { transform: translateX(-50%) scale(0.88); }
-  .channel-mic:active { transform: translateY(-60%) scale(0.88); }
-  .channel-speaker:active { transform: translateY(-60%) scale(0.88); }
-
-  /* Timer — bottom center, only visible when recording */
-  .timer {
+  /* Status text — bottom center */
+  .status {
     position: absolute;
     bottom: 10px;
     left: 50%;
@@ -253,12 +234,7 @@
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.04em;
     white-space: nowrap;
-    display: none;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-  }
-
-  .state-recording .timer {
-    display: block;
   }
 
   /* Loading state — after power on, before data arrives */
@@ -269,15 +245,12 @@
   .state-loading .power-btn svg {
     stroke: #ff9500;
   }
-  .state-loading .timer {
-    display: block;
-  }
 </style>
 </head>
 <body>
   <div class="widget" id="widget">
     <!-- Screen/monitor icon (top) -->
-    <div class="channel-icon channel-screen disabled" id="ch-screen" data-channel="screen">
+    <div class="channel-icon channel-screen" id="ch-screen">
       <svg viewBox="0 0 24 24">
         <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
         <line x1="8" y1="21" x2="16" y2="21"/>
@@ -286,7 +259,7 @@
     </div>
 
     <!-- Mic icon (left) -->
-    <div class="channel-icon channel-mic disabled" id="ch-mic" data-channel="mic">
+    <div class="channel-icon channel-mic" id="ch-mic">
       <svg viewBox="0 0 24 24">
         <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
         <path d="M19 10v2a7 7 0 01-14 0v-2"/>
@@ -295,7 +268,7 @@
       </svg>
     </div>
 
-    <!-- Power button (center) -->
+    <!-- Power button (center) — click to stop -->
     <div class="power-btn" id="power-btn">
       <svg viewBox="0 0 24 24">
         <line x1="12" y1="2" x2="12" y2="12"/>
@@ -304,7 +277,7 @@
     </div>
 
     <!-- Speaker icon (right) -->
-    <div class="channel-icon channel-speaker disabled" id="ch-speaker" data-channel="system_audio">
+    <div class="channel-icon channel-speaker" id="ch-speaker">
       <svg viewBox="0 0 24 24">
         <polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/>
         <path d="M19.07 4.93a10 10 0 010 14.14"/>
@@ -312,7 +285,7 @@
       </svg>
     </div>
 
-    <!-- Close button -->
+    <!-- Close button (hides widget) -->
     <div class="close-btn" id="close-btn">
       <svg viewBox="0 0 10 10">
         <line x1="1" y1="1" x2="9" y2="9"/>
@@ -320,106 +293,84 @@
       </svg>
     </div>
 
-    <!-- Timer -->
-    <div class="timer" id="timer">0:00</div>
+    <!-- Status text -->
+    <div class="status" id="status">Starting...</div>
   </div>
 
 <script>
   const { ipcRenderer } = require("electron");
 
   const powerBtn = document.getElementById("power-btn");
-  const timer = document.getElementById("timer");
+  const statusEl = document.getElementById("status");
   const channelEls = {
     screen: document.getElementById("ch-screen"),
     mic: document.getElementById("ch-mic"),
     system_audio: document.getElementById("ch-speaker"),
   };
 
-  let currentState = "idle";
+  let currentState = "starting";
 
   function setState(state) {
     if (currentState === state) return;
     currentState = state;
     document.body.className = `state-${state}`;
-  }
-
-  function updateChannels(channels) {
-    if (!channels) return;
-    for (const [name, status] of Object.entries(channels)) {
-      const el = channelEls[name];
-      if (!el) continue;
-      el.className = `channel-icon channel-${name === "system_audio" ? "speaker" : name}`;
-      if (status === "active") {
-        el.classList.add("active");
-      } else if (status === "muted") {
-        el.classList.add("muted");
-      }
+    
+    if (state === "starting") {
+      statusEl.textContent = "Starting...";
+    } else if (state === "loading") {
+      statusEl.textContent = "Loading...";
+    } else if (state === "recording") {
+      statusEl.textContent = "Recording";
     }
   }
 
-  // Close button click
+  // Close button click — hides the widget
   document.getElementById("close-btn").addEventListener("click", (e) => {
     e.stopPropagation();
     ipcRenderer.send("widget-close");
   });
 
-  // Power button click
+  // Power button click — stops recording
   powerBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    ipcRenderer.send("widget-click");
+    ipcRenderer.send("widget-stop");
   });
 
-  // Channel icon clicks
-  for (const [name, el] of Object.entries(channelEls)) {
-    el.addEventListener("click", (e) => {
-      e.stopPropagation();
-      ipcRenderer.send("widget-channel-toggle", name);
-    });
-  }
-
-  // Receive state updates from main process
-  ipcRenderer.on("widget-state", (_, data) => {
-    if (data.stopping) {
-      setState("idle");
-      timer.style.display = "none";
-      // Disable all channel icons immediately
-      for (const el of Object.values(channelEls)) {
-        el.className = el.className.replace(/\b(active|muted)\b/g, '').trim();
-      }
-      return;
-    } else if (data.recording) {
-      if (data.dataReceived && data.duration != null) {
-        // Data flowing — show timer and enable icons
-        setState("recording");
-        const mins = Math.floor(data.duration / 60);
-        const secs = data.duration % 60;
-        timer.textContent = `${mins}:${secs.toString().padStart(2, "0")}`;
-        timer.style.display = "block";
-        updateChannels(data.channels);
-      } else {
-        // Recording started but no data yet — show Loading...
-        setState("loading");
-        timer.textContent = "Loading...";
-        timer.style.display = "block";
-        // Keep icons disabled during loading
-        return;
-      }
-    } else if (data.starting) {
-      setState("starting");
+  // Receive channel config from main process
+  ipcRenderer.on("widget-config", (_, config) => {
+    // Screen is always active
+    channelEls.screen.classList.add("active");
+    channelEls.screen.classList.remove("muted");
+    
+    // Set mic state
+    if (config.mic) {
+      channelEls.mic.classList.add("active");
+      channelEls.mic.classList.remove("muted");
     } else {
-      setState("idle");
-      timer.style.display = "none";
+      channelEls.mic.classList.add("muted");
+      channelEls.mic.classList.remove("active");
     }
-    if (!data.recording || data.dataReceived) {
-      updateChannels(data.channels);
+    
+    // Set system audio state
+    if (config.systemAudio) {
+      channelEls.system_audio.classList.add("active");
+      channelEls.system_audio.classList.remove("muted");
+    } else {
+      channelEls.system_audio.classList.add("muted");
+      channelEls.system_audio.classList.remove("active");
     }
+  });
+
+  // Receive state changes
+  ipcRenderer.on("widget-state", (_, state) => {
+    setState(state);
   });
 
   // Send initial size
   ipcRenderer.send("widget-resize", { width: 160, height: 150 });
 
   // Initialize
-  setState("idle");
+  setState("starting");
 </script>
 </body>
 </html>
